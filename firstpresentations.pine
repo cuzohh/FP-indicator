@@ -1,5 +1,6 @@
 //@version=6
-indicator("first presented gaps", overlay=true, max_lines_count=500, max_labels_count=500)
+//created by cuzohh
+//indicator("first presented gaps", overlay=true, max_lines_count=500, max_labels_count=500)
 
 // ════════════════════════════════════════════════════════════════════════════
 // INPUTS

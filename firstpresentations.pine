@@ -1,5 +1,4 @@
 //@version=6
-//created by cuzohh
 indicator("first presented gaps", overlay=true, max_lines_count=500, max_labels_count=500)
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -24,24 +23,57 @@ isES = str.contains(syminfo.ticker, "ES") or (syminfo.root == "ES")
 isStoreableSymbol = isMNQ or isNQ or isMES or isES
 
 // ════════════════════════════════════════════════════════════════════════════
-// FVG DETECTION LOGIC
+// FVG DETECTION LOGIC (GOD MODE)
 // ════════════════════════════════════════════════════════════════════════════
 
-[time1m, low1m, high1m, prevTime1m, prevHigh1m, prevLow1m, prev2Time1m, prev2High1m, prev2Low1m] = request.security(syminfo.tickerid, "1", [time, low, high, time[1], high[1], low[1], time[2], high[2], low[2]], lookahead=barmerge.lookahead_off)
+findFirstFVG() =>
+    gTop = float(na)
+    gBot = float(na)
+    gTime = int(na)
+    gBull = bool(na)
+    
+    [t, l, h] = request.security_lower_tf(syminfo.tickerid, "1", [time, low, high])
+    
+    if not na(t) and array.size(t) >= 3
+        for i = 2 to array.size(t) - 1
+            float cL = array.get(l, i)
+            float cH = array.get(h, i)
+            float p2H = array.get(h, i - 2)
+            float p2L = array.get(l, i - 2)
+            int p2T = array.get(t, i - 2) // Start of sequence
+            int p0T = array.get(t, i)     // End of sequence (presentation candle)
+            
+            // Time check: 
+            // 1. First candle (p2T) must be >= 9:31
+            // 2. Last candle (p0T) must be <= 10:59 (so it closes at 11:00)
+            hStart = hour(p2T, timezone)
+            mStart = minute(p2T, timezone)
+            hEnd = hour(p0T, timezone)
+            mEnd = minute(p0T, timezone)
+            
+            bool after930 = (hStart == 9 and mStart >= 31) or (hStart >= 10)
+            bool before1100 = (hEnd < 11) // 10:59 is the last allowed starting minute
+            
+            if after930 and before1100
+                if cL > p2H // Bullish
+                    gTop := cL
+                    gBot := p2H
+                    gTime := array.get(t, i - 2)
+                    gBull := true
+                    break
+                else if cH < p2L // Bearish
+                    gTop := p2L
+                    gBot := cH
+                    gTime := array.get(t, i - 2)
+                    gBull := false
+                    break
+    [gTime, gTop, gBot, gBull]
 
-bool bullishGap = low1m > prev2High1m
-bool bearishGap = high1m < prev2Low1m
-
-date1m = dayofmonth(time1m, timezone)
-month1m = month(time1m, timezone)
-year1m = year(time1m, timezone)
-
-gapHour = hour(prevTime1m, timezone)
-gapMinute = minute(prevTime1m, timezone)
-isInWindow = (gapHour == 9 and gapMinute >= 31) or (gapHour == 10) or (gapHour == 11 and gapMinute == 0)
+// Request FVG data from the 60m timeframe
+[pTime, pTop, pBot, pBull] = request.security(syminfo.tickerid, "60", findFirstFVG(), lookahead=barmerge.lookahead_on)
 
 // ════════════════════════════════════════════════════════════════════════════
-// STORAGE ARRAYS
+// STORAGE LOGIC
 // ════════════════════════════════════════════════════════════════════════════
 
 var array<int> gapTimes = array.new<int>()
@@ -49,81 +81,51 @@ var array<float> gapTops = array.new<float>()
 var array<float> gapBottoms = array.new<float>()
 var array<bool> gapIsBullish = array.new<bool>()
 
-var int currentDayDate = 0
-var int currentDayMonth = 0
-var int currentDayYear = 0
-var bool gapFoundForCurrentDay = false
-var int currentDayGapTime = 0
-var float currentDayGapTop = 0.0
-var float currentDayGapBottom = 0.0
-var bool currentDayGapIsBull = false
-
-// ════════════════════════════════════════════════════════════════════════════
-// PROCESS EACH BAR
-// ════════════════════════════════════════════════════════════════════════════
-
-bool newDay = (date1m != currentDayDate) or (month1m != currentDayMonth) or (year1m != currentDayYear)
-
-if newDay and currentDayDate > 0
-    if gapFoundForCurrentDay and currentDayGapTime > 0 and isStoreableSymbol
-        array.unshift(gapTimes, currentDayGapTime)
-        array.unshift(gapTops, currentDayGapTop)
-        array.unshift(gapBottoms, currentDayGapBottom)
-        array.unshift(gapIsBullish, currentDayGapIsBull)
-        
-        if array.size(gapTimes) > maxDaysToStore
-            array.pop(gapTimes)
-            array.pop(gapTops)
-            array.pop(gapBottoms)
-            array.pop(gapIsBullish)
+// Add newly found gaps to the persistent arrays
+if not na(pTime) and isStoreableSymbol
+    int pDay = dayofmonth(pTime, timezone)
+    int pMon = month(pTime, timezone)
+    int pYr = year(pTime, timezone)
     
-    gapFoundForCurrentDay := false
-    currentDayGapTime := 0
-    currentDayGapTop := 0.0
-    currentDayGapBottom := 0.0
-    currentDayGapIsBull := false
-
-currentDayDate := date1m
-currentDayMonth := month1m
-currentDayYear := year1m
-
-if isInWindow and not gapFoundForCurrentDay
-    if bullishGap
-        gapFoundForCurrentDay := true
-        currentDayGapTime := prev2Time1m
-        currentDayGapTop := low1m
-        currentDayGapBottom := prev2High1m
-        currentDayGapIsBull := true
-    else if bearishGap
-        gapFoundForCurrentDay := true
-        currentDayGapTime := prev2Time1m
-        currentDayGapTop := prev2Low1m
-        currentDayGapBottom := high1m
-        currentDayGapIsBull := false
-
-if barstate.islastconfirmedhistory
-    if gapFoundForCurrentDay and currentDayGapTime > 0 and isStoreableSymbol
-        bool alreadySaved = false
+    int existingIdxForDay = -1
+    if array.size(gapTimes) > 0
+        for i = 0 to array.size(gapTimes) - 1
+            int gT = array.get(gapTimes, i)
+            if dayofmonth(gT, timezone) == pDay and month(gT, timezone) == pMon and year(gT, timezone) == pYr
+                existingIdxForDay := i
+                break
+    
+    if existingIdxForDay == -1
+        // NEW DAY: Insert and keep sorted by time (descending: newest first)
+        int insertIdx = 0
         if array.size(gapTimes) > 0
             for i = 0 to array.size(gapTimes) - 1
-                if array.get(gapTimes, i) == currentDayGapTime
-                    alreadySaved := true
+                if pTime > array.get(gapTimes, i)
                     break
+                insertIdx := i + 1
         
-        if not alreadySaved
-            array.unshift(gapTimes, currentDayGapTime)
-            array.unshift(gapTops, currentDayGapTop)
-            array.unshift(gapBottoms, currentDayGapBottom)
-            array.unshift(gapIsBullish, currentDayGapIsBull)
-            
-            if array.size(gapTimes) > maxDaysToStore
-                array.pop(gapTimes)
-                array.pop(gapTops)
-                array.pop(gapBottoms)
-                array.pop(gapIsBullish)
+        if insertIdx < maxDaysToStore
+            array.insert(gapTimes, insertIdx, pTime)
+            array.insert(gapTops, insertIdx, pTop)
+            array.insert(gapBottoms, insertIdx, pBot)
+            array.insert(gapIsBullish, insertIdx, pBull)
+    else
+        // DAY ALREADY HAS A GAP: Only update if the new one is EARLIER (the first presented)
+        if pTime < array.get(gapTimes, existingIdxForDay)
+            array.set(gapTimes, existingIdxForDay, pTime)
+            array.set(gapTops, existingIdxForDay, pTop)
+            array.set(gapBottoms, existingIdxForDay, pBot)
+            array.set(gapIsBullish, existingIdxForDay, pBull)
+
+    // Maintain max size
+    if array.size(gapTimes) > maxDaysToStore
+        array.pop(gapTimes)
+        array.pop(gapTops)
+        array.pop(gapBottoms)
+        array.pop(gapIsBullish)
 
 // ════════════════════════════════════════════════════════════════════════════
-// LINE & LABEL MANAGEMENT
+// DRAWING LOGIC
 // ════════════════════════════════════════════════════════════════════════════
 
 var array<line> topLines = array.new<line>()
@@ -133,120 +135,73 @@ var array<label> topLabels = array.new<label>()
 var array<label> bottomLabels = array.new<label>()
 var array<int> activeGapTimes = array.new<int>()
 
-if showGaps
-    // Create a temporary list of all gaps to display (Today + History)
-    var int[] displayTimes = array.new<int>()
-    var float[] displayTops = array.new<float>()
-    var float[] displayBottoms = array.new<float>()
-    var bool[] displayIsBull = array.new<bool>()
-    var string[] displayNames = array.new<string>()
+if showGaps and array.size(gapTimes) > 0
+    int numToDisplay = math.min(maxDaysToDisplay, array.size(gapTimes))
     
-    array.clear(displayTimes)
-    array.clear(displayTops)
-    array.clear(displayBottoms)
-    array.clear(displayIsBull)
-    array.clear(displayNames)
+    // Track which times we are displaying this bar
+    var int[] currentDisplayTimes = array.new<int>()
+    array.clear(currentDisplayTimes)
 
-    // Add Today's gap first (D0)
-    if gapFoundForCurrentDay and currentDayGapTime > 0
-        array.push(displayTimes, currentDayGapTime)
-        array.push(displayTops, currentDayGapTop)
-        array.push(displayBottoms, currentDayGapBottom)
-        array.push(displayIsBull, currentDayGapIsBull)
-        array.push(displayNames, "D0")
+    for i = 0 to numToDisplay - 1
+        int gTime = array.get(gapTimes, i)
+        float gTop = array.get(gapTops, i)
+        float gBot = array.get(gapBottoms, i)
+        bool isB = array.get(gapIsBullish, i)
+        
+        // Determine label: D1 for today's gap, D2, D3 etc for history
+        // Note: Since array is sorted descending, index 0 is always the most recent found
+        string dName = "D" + str.tostring(i + 1)
+        color gCol = isB ? bullishColorDark : bearishColorDark
+        
+        array.push(currentDisplayTimes, gTime)
 
-    // Add Historical gaps (D1, D2, etc.)
-    int histCount = math.min(maxDaysToDisplay - (array.size(displayTimes) > 0 ? 1 : 0), array.size(gapTimes))
-    if histCount > 0
-        for i = 0 to histCount - 1
-            array.push(displayTimes, array.get(gapTimes, i))
-            array.push(displayTops, array.get(gapTops, i))
-            array.push(displayBottoms, array.get(gapBottoms, i))
-            array.push(displayIsBull, array.get(gapIsBullish, i))
-            array.push(displayNames, "D" + str.tostring(i + 1))
+        // Find if we already have a line for this gap
+        int existingIdx = -1
+        if array.size(activeGapTimes) > 0
+            for j = 0 to array.size(activeGapTimes) - 1
+                if array.get(activeGapTimes, j) == gTime
+                    existingIdx := j
+                    break
 
-    // Update or Create Drawing Objects
-    int numGaps = array.size(displayTimes)
-    if numGaps > 0
-        for i = 0 to numGaps - 1
-            int gTime = array.get(displayTimes, i)
-            float gTop = array.get(displayTops, i)
-            float gBot = array.get(displayBottoms, i)
-            bool isB = array.get(displayIsBull, i)
-            string dName = array.get(displayNames, i)
-            color gCol = isB ? bullishColorDark : bearishColorDark
+        if existingIdx == -1
+            // Create New
+            line tl = line.new(gTime, gTop, time, gTop, xloc=xloc.bar_time, color=gCol, width=lineWidth)
+            line bl = line.new(gTime, gBot, time, gBot, xloc=xloc.bar_time, color=gCol, width=lineWidth)
+            float gMid = (gTop + gBot) / 2
+            color midCol = color.new(isB ? #90EE90 : #FFB6C1, 30)
+            line ml = line.new(gTime, gMid, time, gMid, xloc=xloc.bar_time, color=midCol, width=1, style=line.style_dashed)
+            label tlb = label.new(bar_index + 3, gTop, dName, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, textcolor=gCol, color=color.new(gCol, 100), size=size.small)
+            label blb = label.new(bar_index + 3, gBot, dName, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, textcolor=gCol, color=color.new(gCol, 100), size=size.small)
             
-            // Check if we already have objects for this specific gap time
-            int existingIdx = -1
-            if array.size(activeGapTimes) > 0
-                for j = 0 to array.size(activeGapTimes) - 1
-                    if array.get(activeGapTimes, j) == gTime
-                        existingIdx := j
-                        break
+            array.push(topLines, tl)
+            array.push(bottomLines, bl)
+            array.push(midLines, ml)
+            array.push(topLabels, tlb)
+            array.push(bottomLabels, blb)
+            array.push(activeGapTimes, gTime)
+        else
+            // Update Existing
+            line.set_x2(array.get(topLines, existingIdx), time)
+            line.set_x2(array.get(bottomLines, existingIdx), time)
+            line.set_x2(array.get(midLines, existingIdx), time)
+            label.set_x(array.get(topLabels, existingIdx), bar_index + 3)
+            label.set_x(array.get(bottomLabels, existingIdx), bar_index + 3)
+            label.set_text(array.get(topLabels, existingIdx), dName)
+            label.set_text(array.get(bottomLabels, existingIdx), dName)
 
-            if existingIdx == -1
-                // Create New
-                line tl = line.new(gTime, gTop, time, gTop, xloc=xloc.bar_time, color=gCol, width=lineWidth)
-                line bl = line.new(gTime, gBot, time, gBot, xloc=xloc.bar_time, color=gCol, width=lineWidth)
-                
-                // Create midpoint line (dashed, transparent, lighter)
-                float gMid = (gTop + gBot) / 2
-                color midCol = color.new(isB ? #90EE90 : #FFB6C1, 30)
-                line ml = line.new(gTime, gMid, time, gMid, xloc=xloc.bar_time, color=midCol, width=1, style=line.style_dashed)
-                
-                // Create labels to the right of line end
-                label tlb = label.new(bar_index + 3, gTop, dName, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, textcolor=gCol, color=color.new(gCol, 100), size=size.small)
-                label blb = label.new(bar_index + 3, gBot, dName, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, textcolor=gCol, color=color.new(gCol, 100), size=size.small)
-                
-                array.push(topLines, tl)
-                array.push(bottomLines, bl)
-                array.push(midLines, ml)
-                array.push(topLabels, tlb)
-                array.push(bottomLabels, blb)
-                array.push(activeGapTimes, gTime)
-            else
-                // Update Existing lines to end at current time
-                line.set_x2(array.get(topLines, existingIdx), time)
-                line.set_x2(array.get(bottomLines, existingIdx), time)
-                line.set_x2(array.get(midLines, existingIdx), time)
-
-    // Update ALL label positions on every bar to keep them sticky (to the right of line end)
-    if array.size(topLabels) > 0
-        for i = 0 to array.size(topLabels) - 1
-            // Find the corresponding display info for this label
-            int activeTime = array.get(activeGapTimes, i)
-            string labelText = ""
-            
-            // Determine which day this is
-            if gapFoundForCurrentDay and currentDayGapTime > 0 and activeTime == currentDayGapTime
-                labelText := "D0"
-            else
-                // Find in historical gaps
-                if array.size(gapTimes) > 0
-                    for j = 0 to array.size(gapTimes) - 1
-                        if array.get(gapTimes, j) == activeTime
-                            labelText := "D" + str.tostring(j + 1)
-                            break
-            
-            if labelText != ""
-                label.set_x(array.get(topLabels, i), bar_index + 3)
-                label.set_x(array.get(bottomLabels, i), bar_index + 3)
-                label.set_text(array.get(topLabels, i), labelText)
-                label.set_text(array.get(bottomLabels, i), labelText)
-
-    // Cleanup objects that are no longer in the display list
+    // Cleanup gaps no longer in the display range
     if array.size(activeGapTimes) > 0
         int k = 0
         while k < array.size(activeGapTimes)
             int activeTime = array.get(activeGapTimes, k)
-            bool stillActive = false
-            if array.size(displayTimes) > 0
-                for m = 0 to array.size(displayTimes) - 1
-                    if array.get(displayTimes, m) == activeTime
-                        stillActive := true
+            bool stillInDisplay = false
+            if array.size(currentDisplayTimes) > 0
+                for m = 0 to array.size(currentDisplayTimes) - 1
+                    if array.get(currentDisplayTimes, m) == activeTime
+                        stillInDisplay := true
                         break
             
-            if not stillActive
+            if not stillInDisplay
                 line.delete(array.get(topLines, k))
                 line.delete(array.get(bottomLines, k))
                 line.delete(array.get(midLines, k))

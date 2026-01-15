@@ -157,7 +157,6 @@ if showGaps and array.size(gapTimes) > 0
         
         // Calculate shading for overlapping gaps
         color finalGCol = gCol
-        color finalMidCol = color.new(isB ? #90EE90 : #FFB6C1, 30)
         
         if useOverlappingShades
             int overlapCount = 0
@@ -177,8 +176,9 @@ if showGaps and array.size(gapTimes) > 0
                 else
                     // Bearish: Red (base) -> Orange -> Pink
                     finalGCol := (overlapCount % 3 == 1) ? #FF8C00 : (overlapCount % 3 == 2) ? #FF1493 : gCol
-                
-                finalMidCol := color.new(finalGCol, 40)
+        
+        // Set mid-line color to the same shade as the main lines (with slight transparency)
+        color finalMidCol = color.new(finalGCol, 40)
 
         array.push(currentDisplayTimes, gTime)
 

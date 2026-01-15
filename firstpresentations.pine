@@ -1,4 +1,5 @@
 //@version=6
+// by cuzohh
 indicator("first presented gaps", overlay=true, max_lines_count=500, max_labels_count=500)
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -11,6 +12,7 @@ showGaps = input.bool(true, "Show Gaps", group="Display")
 lineWidth = input.int(2, "Line Width", minval=1, maxval=5, group="Display")
 bullishColorDark = input.color(#008000, "Bullish Color", group="Display")
 bearishColorDark = input.color(#B22222, "Bearish Color", group="Display")
+useOverlappingShades = input.bool(true, "Vary Overlapping Shades", tooltip="Slightly varies the brightness/transparency of overlapping gaps to make them distinguishable", group="Display")
 
 // Always store up to 20 days
 maxDaysToStore = 20
@@ -153,6 +155,31 @@ if showGaps and array.size(gapTimes) > 0
         string dName = "D" + str.tostring(i + 1)
         color gCol = isB ? bullishColorDark : bearishColorDark
         
+        // Calculate shading for overlapping gaps
+        color finalGCol = gCol
+        color finalMidCol = color.new(isB ? #90EE90 : #FFB6C1, 30)
+        
+        if useOverlappingShades
+            int overlapCount = 0
+            if i > 0
+                for j = 0 to i - 1
+                    float prevTop = array.get(gapTops, j)
+                    float prevBot = array.get(gapBottoms, j)
+                    // Check if price range overlaps with any "newer" gap being displayed
+                    if math.max(gBot, prevBot) < math.min(gTop, prevTop)
+                        overlapCount += 1
+            
+            if overlapCount > 0
+                // Cycle through distinct colors for overlapping gaps to make them obvious
+                if isB
+                    // Bullish: Green (base) -> Lime -> Aqua
+                    finalGCol := (overlapCount % 3 == 1) ? #32CD32 : (overlapCount % 3 == 2) ? #00FFFF : gCol
+                else
+                    // Bearish: Red (base) -> Orange -> Pink
+                    finalGCol := (overlapCount % 3 == 1) ? #FF8C00 : (overlapCount % 3 == 2) ? #FF1493 : gCol
+                
+                finalMidCol := color.new(finalGCol, 40)
+
         array.push(currentDisplayTimes, gTime)
 
         // Find if we already have a line for this gap
@@ -165,13 +192,12 @@ if showGaps and array.size(gapTimes) > 0
 
         if existingIdx == -1
             // Create New
-            line tl = line.new(gTime, gTop, time, gTop, xloc=xloc.bar_time, color=gCol, width=lineWidth)
-            line bl = line.new(gTime, gBot, time, gBot, xloc=xloc.bar_time, color=gCol, width=lineWidth)
+            line tl = line.new(gTime, gTop, time, gTop, xloc=xloc.bar_time, color=finalGCol, width=lineWidth)
+            line bl = line.new(gTime, gBot, time, gBot, xloc=xloc.bar_time, color=finalGCol, width=lineWidth)
             float gMid = (gTop + gBot) / 2
-            color midCol = color.new(isB ? #90EE90 : #FFB6C1, 30)
-            line ml = line.new(gTime, gMid, time, gMid, xloc=xloc.bar_time, color=midCol, width=1, style=line.style_dashed)
-            label tlb = label.new(bar_index + 3, gTop, dName, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, textcolor=gCol, color=color.new(gCol, 100), size=size.small)
-            label blb = label.new(bar_index + 3, gBot, dName, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, textcolor=gCol, color=color.new(gCol, 100), size=size.small)
+            line ml = line.new(gTime, gMid, time, gMid, xloc=xloc.bar_time, color=finalMidCol, width=1, style=line.style_dashed)
+            label tlb = label.new(bar_index + 3, gTop, dName, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, textcolor=finalGCol, color=color.new(finalGCol, 100), size=size.small)
+            label blb = label.new(bar_index + 3, gBot, dName, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, textcolor=finalGCol, color=color.new(finalGCol, 100), size=size.small)
             
             array.push(topLines, tl)
             array.push(bottomLines, bl)
@@ -184,10 +210,18 @@ if showGaps and array.size(gapTimes) > 0
             line.set_x2(array.get(topLines, existingIdx), time)
             line.set_x2(array.get(bottomLines, existingIdx), time)
             line.set_x2(array.get(midLines, existingIdx), time)
+            
+            // Update colors in case they changed due to new overlaps
+            line.set_color(array.get(topLines, existingIdx), finalGCol)
+            line.set_color(array.get(bottomLines, existingIdx), finalGCol)
+            line.set_color(array.get(midLines, existingIdx), finalMidCol)
+            
             label.set_x(array.get(topLabels, existingIdx), bar_index + 3)
             label.set_x(array.get(bottomLabels, existingIdx), bar_index + 3)
             label.set_text(array.get(topLabels, existingIdx), dName)
             label.set_text(array.get(bottomLabels, existingIdx), dName)
+            label.set_textcolor(array.get(topLabels, existingIdx), finalGCol)
+            label.set_textcolor(array.get(bottomLabels, existingIdx), finalGCol)
 
     // Cleanup gaps no longer in the display range
     if array.size(activeGapTimes) > 0
